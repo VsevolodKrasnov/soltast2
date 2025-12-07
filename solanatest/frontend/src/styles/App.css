@@ -1,0 +1,285 @@
+.app-root {
+  display: flex;
+  min-height: 100vh;
+  background: radial-gradient(circle at top left, #4b1d84, #080016 55%, #02000a);
+  color: #f5efff;
+}
+
+/* Sidebar */
+.sidebar {
+  width: 260px;
+  padding: 24px 20px;
+  background: radial-gradient(circle at top, #2b0b4f, #050010);
+  border-right: 1px solid rgba(255,255,255,0.05);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.logo {
+  font-size: 24px;
+  font-weight: 800;
+  line-height: 1.1;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  background: linear-gradient(135deg, #f7f1ff, #c69fff);
+  -webkit-background-clip: text;
+  color: transparent;
+}
+
+.subtitle {
+  font-size: 12px;
+  opacity: 0.75;
+}
+
+.sidebar-nav {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 13px;
+  opacity: 0.9;
+}
+
+.sidebar-nav span::before {
+  content: '• ';
+  color: #c69fff;
+}
+
+/* Main layout */
+.main {
+  flex: 1;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+}
+
+.panel-grid {
+  display: grid;
+  grid-template-columns: 2.2fr 1.4fr 1.4fr; /* слева больше под кошельки */
+  grid-auto-rows: minmax(340px, auto);
+  gap: 20px;
+}
+
+/* Card */
+.card {
+  position: relative;
+  padding: 18px 18px 16px;
+  border-radius: 18px;
+  background:
+    radial-gradient(circle at top left, rgba(180, 120, 255, 0.35), transparent 55%),
+    radial-gradient(circle at bottom right, rgba(94, 58, 190, 0.55), #0a0317);
+  border: 1px solid rgba(255,255,255,0.06);
+  box-shadow:
+    0 18px 40px rgba(0, 0, 0, 0.75),
+    0 0 0 1px rgba(255,255,255,0.03);
+}
+
+.card h2 {
+  margin: 0 0 10px;
+  font-size: 16px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.card label {
+  display: block;
+  font-size: 12px;
+  opacity: 0.85;
+  margin-bottom: 4px;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 8px 0;
+  flex-wrap: wrap;
+}
+
+input[type="text"],
+input[type="number"] {
+  background: rgba(8, 2, 24, 0.9);
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.08);
+  color: #f5efff;
+  padding: 6px 10px;
+  font-size: 13px;
+  flex: 1;
+}
+
+button {
+  border-radius: 999px;
+  border: none;
+  padding: 7px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  cursor: pointer;
+  background: linear-gradient(135deg, #f973ff, #a855ff);
+  color: #050014;
+  box-shadow: 0 10px 25px rgba(0,0,0,0.55);
+  transition: transform 0.08s ease-out, box-shadow 0.08s ease-out, opacity 0.1s;
+}
+
+button:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 14px 30px rgba(0,0,0,0.7);
+}
+
+button:active:not(:disabled) {
+  transform: translateY(0);
+  box-shadow: 0 6px 15px rgba(0,0,0,0.7);
+}
+
+button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.ghost-btn {
+  border-radius: 999px;
+  padding: 6px 12px;
+  border: 1px solid rgba(255,255,255,0.3);
+  font-size: 12px;
+  text-decoration: none;
+  color: #f5efff;
+  opacity: 0.85;
+}
+
+.wallet-table {
+  margin-top: 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(255,255,255,0.06);
+  overflow: hidden;
+  max-height: 420px;
+  backdrop-filter: blur(10px);
+}
+
+.wallet-table.small {
+  max-height: 180px;
+}
+
+.wallet-row {
+  display: grid;
+  grid-template-columns: 40px 1fr 70px;
+  align-items: center;
+  padding: 5px 10px;
+  font-size: 12px;
+}
+
+.wallet-row.header {
+  background: rgba(255,255,255,0.04);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 10px;
+}
+
+.wallet-row:nth-child(odd):not(.header) {
+  background: rgba(255,255,255,0.01);
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+  font-size: 11px;
+}
+
+.hint {
+  margin-top: 8px;
+  font-size: 11px;
+  opacity: 0.8;
+}
+
+.big-number {
+  margin-top: 10px;
+  font-size: 26px;
+  font-weight: 700;
+}
+
+.log-box {
+  margin-top: 8px;
+  padding: 8px;
+  font-size: 11px;
+  border-radius: 10px;
+  background: rgba(5,0,20,0.9);
+  border: 1px solid rgba(255,255,255,0.08);
+  max-height: 170px;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+
+/* Responsive */
+@media (max-width: 960px) {
+  .app-root {
+    flex-direction: column;
+  }
+  .sidebar {
+    width: 100%;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .panel-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.buy-sell-tabs {
+  display: flex;
+  gap: 8px;
+  margin: 8px 0 4px;
+}
+
+.buy-sell-tab {
+  flex: 1;
+  text-align: center;
+  font-size: 13px;
+  padding: 6px 0;
+  border-radius: 999px;
+  cursor: pointer;
+  background: rgba(255,255,255,0.02);
+}
+
+.buy-sell-tab.active-buy {
+  background: linear-gradient(135deg, #16a34a, #4ade80);
+  color: #020617;
+}
+
+.buy-sell-tab.active-sell {
+  background: linear-gradient(135deg, #f97373, #fb7185);
+  color: #020617;
+}
+
+.percent-row {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.percent-btn {
+  flex: 1;
+  font-size: 11px;
+  padding: 4px 0;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,0.15);
+  background: rgba(15,23,42,0.7);
+  cursor: pointer;
+}
+
+/* ------------------------------ */
+/*   NEW LAYOUT FOR 3-COLUMN UI   */
+/* ------------------------------ */
+
+.panel-grid-vertical-left {
+  display: grid;
+  grid-template-columns: 1.6fr 1.2fr 1.2fr; /* Left = Wallets+Funding, Middle = SmartBuy, Right = Trade */
+  gap: 20px;
+  align-items: flex-start;
+}
+
+.left-col {
+  display: flex;
+  flex-direction: column;
+}
