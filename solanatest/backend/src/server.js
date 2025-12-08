@@ -1,10 +1,13 @@
 // backend/src/server.js
+// ПОЛНАЯ ВЕРСИЯ: ВСЯ ОРИГИНАЛЬНАЯ ЛОГИКА + FRESH TRACKER + TOKEN API + PRO TRADING
 import express from 'express';
 import cors from 'cors';
 import bodyParser from 'body-parser';
 import dotenv from 'dotenv';
 import bs58 from 'bs58';
 import fetch from 'node-fetch';
+import http from 'http';
+import { setupFreshTrackerWebSocket } from './fresh-tracker-server.js';
 import {
   Connection,
   Keypair,
@@ -24,16 +27,16 @@ const PORT = process.env.PORT || 4000;
 // RPC + JITO
 // =============================
 
-// Основной RPC
 const RPC_ENDPOINT =
   process.env.RPC_ENDPOINT ||
   process.env.HELIUS_RPC_URL ||
   'https://api.mainnet-beta.solana.com';
 
-// JITO endpoint (для bundle мгновенных SELL ALL)
 const JITO_BUNDLE_URL =
   process.env.JITO_BUNDLE_URL ||
   'https://mainnet.block-engine.jito.wtf/api/v1/bundles';
+
+const PUMPFUN_TRADE_LOCAL_URL = 'https://pumpportal.fun/api/trade-local';
 
 console.log('🔌 Using RPC:', RPC_ENDPOINT);
 console.log('🚀 JITO bundle endpoint:', JITO_BUNDLE_URL);
@@ -44,6 +47,8 @@ const connection = new Connection(RPC_ENDPOINT, {
 
 app.use(cors());
 app.use(bodyParser.json({ limit: '30mb' }));
+
+let freshTrackerService = null;
 
 // =============================
 // HELPERS
@@ -68,7 +73,7 @@ function solToLamports(sol) {
 }
 
 // =============================
-// WALLET FACTORY (создание кошельков)
+// WALLET FACTORY
 // =============================
 
 function createWallets(count) {
@@ -82,40 +87,11 @@ function createWallets(count) {
   }
   return arr;
 }
+
 // =============================
-// API: GET WALLETS BALANCES
-// =============================
-app.post('/api/wallets/balances', async (req, res) => {
-  try {
-    const { wallets } = req.body || {};
-
-    if (!Array.isArray(wallets) || wallets.length === 0)
-      return res.status(400).json({ error: "wallets[] required" });
-
-    const out = {};
-
-    for (const pk of wallets) {
-      try {
-        const amount = await connection.getBalance(new PublicKey(pk));
-        out[pk] = amount / 1e9;
-      } catch {
-        out[pk] = null;
-      }
-    }
-
-    res.json({ balances: out });
-  } catch (e) {
-    console.error("balances error:", e.message);
-    res.status(500).json({ error: "internal error" });
-  }
-});
-// =============================
-// Pump.fun trade-local (buy/sell builder)
+// PUMPFUN TX BUILDERS
 // =============================
 
-const PUMPFUN_TRADE_LOCAL_URL = 'https://pumpportal.fun/api/trade-local';
-
-// --- Build BUY transaction (amountSol в SOL, denominatedInSol=true)
 async function buildPumpfunBuyTx({
   walletKp,
   mint,
@@ -130,8 +106,8 @@ async function buildPumpfunBuyTx({
       publicKey: walletKp.publicKey.toBase58(),
       action: 'buy',
       mint,
-      denominatedInSol: true, // boolean
-      amount: amountSol, // number (SOL)
+      denominatedInSol: true,
+      amount: amountSol,
       slippage: slippagePercent ?? 10,
       priorityFee: priorityFeeSol,
       pool: 'pump',
@@ -159,12 +135,11 @@ async function buildPumpfunBuyTx({
   }
 }
 
-// --- Build SELL ALL (100%) transaction
 async function buildPumpfunSellAllTx({
   walletKp,
   mint,
   priorityFeeLamports,
-  slippagePercent = 30, // агрессивный дефолт
+  slippagePercent = 30,
 }) {
   try {
     const priorityFeeSol = lamportsToSol(priorityFeeLamports || 0) || 0.0001;
@@ -173,8 +148,8 @@ async function buildPumpfunSellAllTx({
       publicKey: walletKp.publicKey.toBase58(),
       action: 'sell',
       mint,
-      denominatedInSol: false, // boolean
-      amount: '100%', // строка ТОЛЬКО для sell-all
+      denominatedInSol: false,
+      amount: '100%',
       slippage: slippagePercent,
       priorityFee: priorityFeeSol,
       pool: 'pump',
@@ -202,168 +177,233 @@ async function buildPumpfunSellAllTx({
   }
 }
 
-// =============================
-// API 1: Create wallets
-// =============================
-
-app.post('/api/wallets/create', async (req, res) => {
+// Universal builder for buy/sell with percent support
+async function buildPumpfunTx({
+  walletKp,
+  mint,
+  amountSol,
+  action,
+  slippagePercent,
+  priorityFeeLamports,
+}) {
   try {
-    let { count } = req.body || {};
-    count = Number(count) || 0;
+    const priorityFeeSol = lamportsToSol(priorityFeeLamports || 0) || 0.00001;
 
-    if (count < 1 || count > 300)
-      return res.status(400).json({ error: 'count must be 1–300' });
+    const body = {
+      publicKey: walletKp.publicKey.toBase58(),
+      action,
+      mint,
+      denominatedInSol: action === 'buy' ? true : false,
+      amount: action === 'buy' ? Number(amountSol) : amountSol,
+      slippage: slippagePercent ?? 10,
+      priorityFee: priorityFeeSol,
+      pool: 'pump',
+    };
 
-    const wallets = createWallets(count);
+    const resp = await fetch(PUMPFUN_TRADE_LOCAL_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
 
-    const csv =
-      'index,publicKey,secretKeyBase58\n' +
-      wallets.map((w, i) => `${i + 1},${w.publicKey},${w.secretKey}`).join('\n');
+    if (!resp.ok) {
+      const msg = await resp.text();
+      console.error(`❌ Pump.fun ${action} error:`, resp.status, msg);
+      return null;
+    }
 
-    res.json({ wallets, csv });
+    const buf = await resp.arrayBuffer();
+    const tx = VersionedTransaction.deserialize(new Uint8Array(buf));
+    tx.sign([walletKp]);
+    return tx;
   } catch (e) {
-    res.status(500).json({ error: 'internal error', details: e.message });
+    console.error(`❌ buildPumpfunTx(${action}) failed:`, e.message);
+    return null;
+  }
+}
+
+// =============================
+// API 1: CREATE WALLETS
+// =============================
+
+app.post('/api/wallets/create', (req, res) => {
+  try {
+    const { count } = req.body || {};
+    const n = Number(count);
+    if (!isFinite(n) || n <= 0 || n > 100) {
+      return res.status(400).json({ error: 'count must be 1-100' });
+    }
+
+    const wallets = createWallets(n);
+    res.json({ status: 'ok', wallets });
+  } catch (e) {
+    console.error('Create wallets error:', e.message);
+    res.status(500).json({ error: 'internal error' });
   }
 });
 
+// =============================
+// API 2: GET WALLETS BALANCES
+// =============================
+
+app.post('/api/wallets/balances', async (req, res) => {
+  try {
+    const { wallets } = req.body || {};
+
+    if (!Array.isArray(wallets) || wallets.length === 0) {
+      return res.status(400).json({ error: 'wallets[] required' });
+    }
+
+    const out = {};
+
+    for (const pk of wallets) {
+      try {
+        const amount = await connection.getBalance(new PublicKey(pk));
+        out[pk] = amount / 1e9;
+      } catch {
+        out[pk] = null;
+      }
+    }
+
+    res.json({ balances: out });
+  } catch (e) {
+    console.error('Balances error:', e.message);
+    res.status(500).json({ error: 'internal error' });
+  }
+});
 
 // =============================
-// API 3: FUND wallets (deposit from main wallet)
+// API 3: FUND WALLETS
 // =============================
 
 app.post('/api/wallets/fund', async (req, res) => {
   try {
     const {
-      mainPrivateKeyBase58,
-      targets,
-      mode,
-      totalSol,
-      perWalletSol,
-      useFullBalance,
+      mainWalletPrivateKey,
+      targetWallets,
+      amountPerWallet,
+      splitEqually,
     } = req.body || {};
 
-    if (!mainPrivateKeyBase58)
-      return res.status(400).json({ error: 'mainPrivateKeyBase58 required' });
+    if (!mainWalletPrivateKey) {
+      return res.status(400).json({ error: 'mainWalletPrivateKey required' });
+    }
 
-    if (!Array.isArray(targets) || targets.length === 0)
-      return res.status(400).json({ error: 'targets[] required' });
+    if (!Array.isArray(targetWallets) || targetWallets.length === 0) {
+      return res.status(400).json({ error: 'targetWallets[] required' });
+    }
 
-    const mainKp = Keypair.fromSecretKey(bs58.decode(mainPrivateKeyBase58));
+    const mainKp = Keypair.fromSecretKey(bs58.decode(mainWalletPrivateKey));
+    const sigs = [];
 
-    let perWalletLamports;
+    if (splitEqually) {
+      const balance = await connection.getBalance(mainKp.publicKey);
+      const availableLamports = balance - 5000 * targetWallets.length - 50000;
+      const perWallet = Math.floor(availableLamports / targetWallets.length);
 
-    if (mode === 'equal') {
-      if (useFullBalance) {
-        const bal = await connection.getBalance(mainKp.publicKey);
-        const safeLamports = Math.max(bal - 0.002 * 1e9, 0);
-        perWalletLamports = Math.floor(safeLamports / targets.length);
-      } else {
-        const total = Number(totalSol || 0);
-        if (total <= 0)
-          return res.status(400).json({ error: 'totalSol must be > 0' });
-        perWalletLamports = Math.floor((total * 1e9) / targets.length);
+      if (perWallet <= 0) {
+        return res.status(400).json({ error: 'Insufficient balance' });
       }
-    } else if (mode === 'perWallet') {
-      const v = Number(perWalletSol || 0);
-      if (v <= 0)
-        return res.status(400).json({ error: 'perWalletSol must be > 0' });
-      perWalletLamports = Math.floor(v * 1e9);
+
+      for (const pkStr of targetWallets) {
+        const tx = new Transaction().add(
+          SystemProgram.transfer({
+            fromPubkey: mainKp.publicKey,
+            toPubkey: new PublicKey(pkStr),
+            lamports: perWallet,
+          })
+        );
+
+        try {
+          const sig = await sendAndConfirmTransaction(connection, tx, [mainKp]);
+          sigs.push({ wallet: pkStr, signature: sig });
+        } catch (e) {
+          sigs.push({ wallet: pkStr, error: e.message });
+        }
+      }
     } else {
-      return res.status(400).json({ error: 'mode must be equal | perWallet' });
-    }
+      const amounts = amountPerWallet || {};
 
-    const signatures = [];
-    const blockhash = await connection.getLatestBlockhash();
+      for (const pkStr of targetWallets) {
+        const sol = Number(amounts[pkStr] || 0);
+        if (sol <= 0) continue;
 
-    for (const pk of targets) {
-      try {
-        const toPubkey = new PublicKey(pk);
+        const lamports = solToLamports(sol);
+        const tx = new Transaction().add(
+          SystemProgram.transfer({
+            fromPubkey: mainKp.publicKey,
+            toPubkey: new PublicKey(pkStr),
+            lamports,
+          })
+        );
 
-        const ix = SystemProgram.transfer({
-          fromPubkey: mainKp.publicKey,
-          toPubkey,
-          lamports: perWalletLamports,
-        });
-
-        const tx = new Transaction().add(ix);
-        tx.feePayer = mainKp.publicKey;
-        tx.recentBlockhash = blockhash.blockhash;
-
-        const sig = await sendAndConfirmTransaction(connection, tx, [mainKp], {
-          commitment: 'confirmed',
-        });
-
-        signatures.push({ to: pk, signature: sig });
-      } catch (e) {
-        console.error('fund wallet error:', e.message);
+        try {
+          const sig = await sendAndConfirmTransaction(connection, tx, [mainKp]);
+          sigs.push({ wallet: pkStr, signature: sig });
+        } catch (e) {
+          sigs.push({ wallet: pkStr, error: e.message });
+        }
       }
     }
 
-    res.json({ signatures });
+    res.json({ status: 'ok', signatures: sigs });
   } catch (e) {
-    console.error('fund error:', e.message);
+    console.error('Fund error:', e.message);
     res.status(500).json({ error: 'internal error', details: e.message });
   }
 });
 
 // =============================
-// API 4: COLLECT wallets (send all SOL back to main)
+// API 4: COLLECT TO MAIN
 // =============================
 
 app.post('/api/wallets/collect', async (req, res) => {
   try {
-    const { mainPrivateKeyBase58, wallets } = req.body || {};
+    const { walletSecretKeysBase58, mainWalletAddress } = req.body || {};
 
-    if (!mainPrivateKeyBase58)
-      return res.status(400).json({ error: 'mainPrivateKeyBase58 required' });
+    if (!Array.isArray(walletSecretKeysBase58) || walletSecretKeysBase58.length === 0) {
+      return res.status(400).json({ error: 'walletSecretKeysBase58[] required' });
+    }
 
-    if (!Array.isArray(wallets) || wallets.length === 0)
-      return res.status(400).json({ error: 'wallets[] required' });
+    if (!mainWalletAddress) {
+      return res.status(400).json({ error: 'mainWalletAddress required' });
+    }
 
-    const mainKp = Keypair.fromSecretKey(bs58.decode(mainPrivateKeyBase58));
-    const blockhash = await connection.getLatestBlockhash();
-    const results = [];
+    const mainPubkey = new PublicKey(mainWalletAddress);
+    const sigs = [];
 
-    for (const sk of wallets) {
+    for (const sk of walletSecretKeysBase58) {
       try {
         const kp = Keypair.fromSecretKey(bs58.decode(sk));
-        const bal = await connection.getBalance(kp.publicKey);
+        const balance = await connection.getBalance(kp.publicKey);
+        const fee = 5000;
 
-        if (bal === 0) {
-          results.push({ from: kp.publicKey.toBase58(), skipped: true });
-          continue;
-        }
+        if (balance <= fee) continue;
 
-        const ix = SystemProgram.transfer({
-          fromPubkey: kp.publicKey,
-          toPubkey: mainKp.publicKey,
-          lamports: Math.max(bal - 5000, 0),
-        });
+        const tx = new Transaction().add(
+          SystemProgram.transfer({
+            fromPubkey: kp.publicKey,
+            toPubkey: mainPubkey,
+            lamports: balance - fee,
+          })
+        );
 
-        const tx = new Transaction().add(ix);
-        tx.feePayer = kp.publicKey;
-        tx.recentBlockhash = blockhash.blockhash;
-
-        const sig = await sendAndConfirmTransaction(connection, tx, [kp], {
-          commitment: 'confirmed',
-        });
-
-        results.push({ from: kp.publicKey.toBase58(), signature: sig });
+        const sig = await sendAndConfirmTransaction(connection, tx, [kp]);
+        sigs.push({ wallet: kp.publicKey.toBase58(), signature: sig });
       } catch (e) {
-        console.error('collect error:', e.message);
-        results.push({ error: e.message });
+        sigs.push({ wallet: 'unknown', error: e.message });
       }
     }
 
-    res.json({ signatures: results });
+    res.json({ status: 'ok', signatures: sigs });
   } catch (e) {
-    console.error('collect error:', e.message);
+    console.error('Collect error:', e.message);
     res.status(500).json({ error: 'internal error', details: e.message });
   }
 });
 
 // =============================
-// API 5: BUY (standard, 1 wallet = 1 tx)
+// API 5: BUY (original)
 // =============================
 
 app.post('/api/trade/buy', async (req, res) => {
@@ -376,22 +416,18 @@ app.post('/api/trade/buy', async (req, res) => {
       slippagePercent,
     } = req.body || {};
 
-    if (
-      !Array.isArray(walletSecretKeysBase58) ||
-      walletSecretKeysBase58.length === 0
-    )
-      return res
-        .status(400)
-        .json({ error: 'walletSecretKeysBase58[] required' });
+    if (!Array.isArray(walletSecretKeysBase58) || walletSecretKeysBase58.length === 0) {
+      return res.status(400).json({ error: 'walletSecretKeysBase58[] required' });
+    }
 
-    if (!mintAddress)
+    if (!mintAddress) {
       return res.status(400).json({ error: 'mintAddress required' });
+    }
 
     const sol = Number(amountSolPerWallet || 0);
-    if (sol <= 0)
-      return res
-        .status(400)
-        .json({ error: 'amountSolPerWallet must be > 0' });
+    if (sol <= 0) {
+      return res.status(400).json({ error: 'amountSolPerWallet must be > 0' });
+    }
 
     const slip = Number(slippagePercent);
     const effectiveSlippage = slip > 0 && slip <= 100 ? slip : 10;
@@ -412,9 +448,7 @@ app.post('/api/trade/buy', async (req, res) => {
 
         if (!tx) continue;
 
-        const raw = tx.serialize();
-
-        const sig = await connection.sendRawTransaction(raw, {
+        const sig = await connection.sendRawTransaction(tx.serialize(), {
           skipPreflight: true,
           maxRetries: 0,
         });
@@ -428,12 +462,16 @@ app.post('/api/trade/buy', async (req, res) => {
           signature: sig,
         });
       } catch (e) {
-        console.error('BUY error:', e.message);
+        sigs.push({
+          wallet: 'unknown',
+          error: e.message,
+        });
       }
     }
 
-    if (sigs.length === 0)
-      return res.status(500).json({ error: 'No buy transactions sent' });
+    if (sigs.length === 0) {
+      return res.status(500).json({ error: 'No transactions sent' });
+    }
 
     res.json({ status: 'ok', txCount: sigs.length, signatures: sigs });
   } catch (e) {
@@ -443,7 +481,441 @@ app.post('/api/trade/buy', async (req, res) => {
 });
 
 // =============================
-// API 6: SELL ALL (100%) — instant mode ("палка в пол")
+// API 6: BUY-FAST (with retries - FOR PRO TRADING)
+// =============================
+
+app.post('/api/trade/buy-fast', async (req, res) => {
+  try {
+    const {
+      walletSecretKeysBase58,
+      mintAddress,
+      amountSolPerWallet,
+      priorityFeeLamports,
+      slippagePercent,
+      maxRetries = 3,
+    } = req.body || {};
+
+    if (!Array.isArray(walletSecretKeysBase58) || walletSecretKeysBase58.length === 0) {
+      return res.status(400).json({ error: 'walletSecretKeysBase58[] required' });
+    }
+
+    if (!mintAddress) {
+      return res.status(400).json({ error: 'mintAddress required' });
+    }
+
+    const sol = Number(amountSolPerWallet || 0);
+    if (sol <= 0) {
+      return res.status(400).json({ error: 'amountSolPerWallet must be > 0' });
+    }
+
+    const slip = Number(slippagePercent);
+    const effectiveSlippage = slip > 0 && slip <= 100 ? slip : 20;
+
+    console.log(`🚀 BUY-FAST: ${walletSecretKeysBase58.length} wallets, ${sol} SOL each`);
+
+    const results = [];
+
+    for (const sk of walletSecretKeysBase58) {
+      let lastError = null;
+      let success = false;
+
+      for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+          const kp = Keypair.fromSecretKey(bs58.decode(sk));
+
+          const tx = await buildPumpfunBuyTx({
+            walletKp: kp,
+            mint: mintAddress,
+            amountSol: sol,
+            priorityFeeLamports,
+            slippagePercent: effectiveSlippage,
+          });
+
+          if (!tx) {
+            throw new Error('Failed to build transaction');
+          }
+
+          const sig = await connection.sendRawTransaction(tx.serialize(), {
+            skipPreflight: true,
+            maxRetries: 0,
+          });
+
+          try {
+            await connection.confirmTransaction(sig, 'confirmed');
+          } catch {}
+
+          results.push({
+            wallet: kp.publicKey.toBase58(),
+            signature: sig,
+            attempt,
+          });
+
+          success = true;
+          break;
+        } catch (e) {
+          lastError = e;
+          console.error(`Attempt ${attempt}/${maxRetries} failed:`, e.message);
+          
+          if (attempt < maxRetries) {
+            await sleep(1000 * attempt);
+          }
+        }
+      }
+
+      if (!success) {
+        results.push({
+          wallet: 'unknown',
+          error: lastError?.message || 'All retries failed',
+        });
+      }
+    }
+
+    res.json({
+      status: 'ok',
+      txCount: results.filter(r => r.signature).length,
+      signatures: results,
+    });
+  } catch (e) {
+    console.error('buy-fast error:', e.message);
+    res.status(500).json({ error: 'internal error', details: e.message });
+  }
+});
+
+// =============================
+// API 7: BUY-REST (proportional buy)
+// =============================
+
+app.post('/api/trade/buy-rest', async (req, res) => {
+  try {
+    const { mintAddress, slippagePercent, perWalletAmounts } = req.body || {};
+
+    if (!mintAddress) {
+      return res.status(400).json({ error: 'mintAddress required' });
+    }
+
+    if (!Array.isArray(perWalletAmounts) || perWalletAmounts.length === 0) {
+      return res.status(400).json({ error: 'perWalletAmounts[] required' });
+    }
+
+    const slip = Number(slippagePercent);
+    const effectiveSlippage = slip > 0 && slip <= 100 ? slip : 10;
+
+    const sigs = [];
+
+    for (const w of perWalletAmounts) {
+      try {
+        const kp = Keypair.fromSecretKey(bs58.decode(w.secretKey));
+
+        const tx = await buildPumpfunBuyTx({
+          walletKp: kp,
+          mint: mintAddress,
+          amountSol: Number(w.solAmount),
+          priorityFeeLamports: 0,
+          slippagePercent: effectiveSlippage,
+        });
+
+        if (!tx) continue;
+
+        const sig = await connection.sendRawTransaction(tx.serialize(), {
+          skipPreflight: true,
+          maxRetries: 0,
+        });
+
+        try {
+          await connection.confirmTransaction(sig, 'confirmed');
+        } catch {}
+
+        sigs.push({
+          wallet: kp.publicKey.toBase58(),
+          signature: sig,
+          solUsed: w.solAmount,
+        });
+      } catch (e) {
+        console.error('buy-rest error:', e.message);
+      }
+    }
+
+    if (sigs.length === 0) {
+      return res.status(500).json({ error: 'No buy-rest transactions sent' });
+    }
+
+    res.json({ status: 'ok', txCount: sigs.length, signatures: sigs });
+  } catch (e) {
+    console.error('buy-rest error:', e.message);
+    res.status(500).json({ error: 'internal error', details: e.message });
+  }
+});
+
+// =============================
+// API 8: SMART-BUY (random amounts + delays)
+// =============================
+
+app.post('/api/trade/smart-buy', async (req, res) => {
+  try {
+    const {
+      mintAddress,
+      wallets,
+      minBuyPercent,
+      maxBuyPercent,
+      minBuySol,
+      minDelaySec,
+      maxDelaySec,
+      slippagePercent,
+      priorityFeeLamports,
+    } = req.body || {};
+
+    if (!mintAddress) {
+      return res.status(400).json({ error: 'mintAddress required' });
+    }
+
+    if (!Array.isArray(wallets) || wallets.length === 0) {
+      return res.status(400).json({ error: 'wallets[] required' });
+    }
+
+    let minPct = Number(minBuyPercent);
+    let maxPct = Number(maxBuyPercent);
+
+    if (!isFinite(minPct) || !isFinite(maxPct)) {
+      return res.status(400).json({ error: 'minBuyPercent/maxBuyPercent required' });
+    }
+
+    if (minPct <= 0 || maxPct <= 0 || maxPct < minPct) {
+      return res.status(400).json({ error: 'percent ranges invalid' });
+    }
+
+    let minBuySolAbs = Number(minBuySol);
+    if (!isFinite(minBuySolAbs) || minBuySolAbs < 0.01) {
+      minBuySolAbs = 0.01;
+    }
+
+    let minDelay = Number(minDelaySec);
+    let maxDelay = Number(maxDelaySec);
+
+    if (!isFinite(minDelay) || minDelay < 0.1) minDelay = 0.1;
+    if (!isFinite(maxDelay) || maxDelay < minDelay) maxDelay = minDelay;
+    if (maxDelay > 10) maxDelay = 10;
+
+    const slip = Number(slippagePercent);
+    const effectiveSlippage = slip > 0 && slip <= 100 ? slip : 10;
+
+    const results = [];
+    let sentCount = 0;
+
+    for (const w of wallets) {
+      const walletPub = w.publicKey;
+      const walletSec = w.secretKey;
+      const balance = Number(w.solBalance || 0);
+
+      if (!walletPub || !walletSec) {
+        results.push({
+          wallet: walletPub || 'unknown',
+          skipped: true,
+          reason: 'missing keys',
+        });
+        continue;
+      }
+
+      if (balance <= 0) {
+        results.push({
+          wallet: walletPub,
+          skipped: true,
+          reason: 'zero balance',
+        });
+        continue;
+      }
+
+      const randomPct = randRange(minPct, maxPct);
+      let buyAmt = (balance * randomPct) / 100;
+
+      if (buyAmt < minBuySolAbs) {
+        buyAmt = minBuySolAbs;
+      }
+
+      if (buyAmt > balance - 0.001) {
+        buyAmt = balance - 0.001;
+      }
+
+      if (buyAmt <= 0) {
+        results.push({
+          wallet: walletPub,
+          skipped: true,
+          reason: 'insufficient after min',
+        });
+        continue;
+      }
+
+      const delaySec = randRange(minDelay, maxDelay);
+      await sleep(delaySec * 1000);
+
+      try {
+        const kp = Keypair.fromSecretKey(bs58.decode(walletSec));
+
+        const tx = await buildPumpfunBuyTx({
+          walletKp: kp,
+          mint: mintAddress,
+          amountSol: buyAmt,
+          priorityFeeLamports,
+          slippagePercent: effectiveSlippage,
+        });
+
+        if (!tx) {
+          results.push({
+            wallet: walletPub,
+            skipped: true,
+            reason: 'tx build failed',
+          });
+          continue;
+        }
+
+        const sig = await connection.sendRawTransaction(tx.serialize(), {
+          skipPreflight: true,
+          maxRetries: 0,
+        });
+
+        try {
+          await connection.confirmTransaction(sig, 'confirmed');
+        } catch {}
+
+        results.push({
+          wallet: walletPub,
+          signature: sig,
+          solBought: buyAmt,
+        });
+
+        sentCount++;
+      } catch (e) {
+        console.error('smart-buy wallet error:', walletPub, e.message);
+        results.push({
+          wallet: walletPub,
+          skipped: true,
+          reason: 'exception',
+          error: e.message,
+        });
+      }
+    }
+
+    if (sentCount === 0) {
+      return res.status(500).json({
+        error: 'No smart-buy transactions sent',
+        results,
+      });
+    }
+
+    res.json({
+      status: 'ok',
+      txCount: sentCount,
+      results,
+    });
+  } catch (e) {
+    console.error('smart-buy error:', e.message);
+    res.status(500).json({ error: 'internal error', details: e.message });
+  }
+});
+
+// =============================
+// API 9: SELL-FAST (with retries - FOR PRO TRADING)
+// =============================
+
+app.post('/api/trade/sell-fast', async (req, res) => {
+  try {
+    const {
+      walletSecretKeysBase58,
+      mintAddress,
+      sellPercent = 100,
+      priorityFeeLamports,
+      slippagePercent,
+      maxRetries = 3,
+    } = req.body || {};
+
+    if (!Array.isArray(walletSecretKeysBase58) || walletSecretKeysBase58.length === 0) {
+      return res.status(400).json({ error: 'walletSecretKeysBase58[] required' });
+    }
+
+    if (!mintAddress) {
+      return res.status(400).json({ error: 'mintAddress required' });
+    }
+
+    const percent = Number(sellPercent);
+    if (percent <= 0 || percent > 100) {
+      return res.status(400).json({ error: 'sellPercent must be 1-100' });
+    }
+
+    const slip = Number(slippagePercent);
+    const effectiveSlippage = slip > 0 && slip <= 100 ? slip : 20;
+
+    console.log(`🔴 SELL-FAST: ${walletSecretKeysBase58.length} wallets, ${percent}%`);
+
+    const results = [];
+
+    for (const sk of walletSecretKeysBase58) {
+      let lastError = null;
+      let success = false;
+
+      for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+          const kp = Keypair.fromSecretKey(bs58.decode(sk));
+
+          const tx = await buildPumpfunTx({
+            walletKp: kp,
+            mint: mintAddress,
+            action: 'sell',
+            amountSol: `${percent}%`,
+            slippagePercent: effectiveSlippage,
+            priorityFeeLamports,
+          });
+
+          if (!tx) {
+            throw new Error('Failed to build transaction');
+          }
+
+          const sig = await connection.sendRawTransaction(tx.serialize(), {
+            skipPreflight: true,
+            maxRetries: 0,
+          });
+
+          try {
+            await connection.confirmTransaction(sig, 'confirmed');
+          } catch {}
+
+          results.push({
+            wallet: kp.publicKey.toBase58(),
+            signature: sig,
+            attempt,
+          });
+
+          success = true;
+          break;
+        } catch (e) {
+          lastError = e;
+          console.error(`Attempt ${attempt}/${maxRetries} failed:`, e.message);
+          
+          if (attempt < maxRetries) {
+            await sleep(1000 * attempt);
+          }
+        }
+      }
+
+      if (!success) {
+        results.push({
+          wallet: 'unknown',
+          error: lastError?.message || 'All retries failed',
+        });
+      }
+    }
+
+    res.json({
+      status: 'ok',
+      txCount: results.filter(r => r.signature).length,
+      signatures: results,
+    });
+  } catch (e) {
+    console.error('sell-fast error:', e.message);
+    res.status(500).json({ error: 'internal error', details: e.message });
+  }
+});
+
+// =============================
+// API 10: SELL-ALL (JITO bundle + fallback)
 // =============================
 
 app.post('/api/trade/sell-all', async (req, res) => {
@@ -455,24 +927,20 @@ app.post('/api/trade/sell-all', async (req, res) => {
       slippagePercent,
     } = req.body || {};
 
-    if (
-      !Array.isArray(walletSecretKeysBase58) ||
-      walletSecretKeysBase58.length === 0
-    )
-      return res
-        .status(400)
-        .json({ error: 'walletSecretKeysBase58[] required' });
+    if (!Array.isArray(walletSecretKeysBase58) || walletSecretKeysBase58.length === 0) {
+      return res.status(400).json({ error: 'walletSecretKeysBase58[] required' });
+    }
 
-    if (!mintAddress)
+    if (!mintAddress) {
       return res.status(400).json({ error: 'mintAddress required' });
+    }
 
     const slip = Number(slippagePercent);
-    const effectiveSlippage = slip > 0 && slip <= 100 ? slip : 30; // агрессивный дефолт
+    const effectiveSlippage = slip > 0 && slip <= 100 ? slip : 30;
 
     const builtTxs = [];
-    const sigs = [];
 
-    // 1) строим все sell-all tx
+    // Build all sell-all transactions
     for (const sk of walletSecretKeysBase58) {
       try {
         const kp = Keypair.fromSecretKey(bs58.decode(sk));
@@ -492,45 +960,43 @@ app.post('/api/trade/sell-all', async (req, res) => {
         builtTxs.push({
           signedTx: base58Tx,
           wallet: kp.publicKey.toBase58(),
+          rawTx: raw,
         });
       } catch (e) {
         console.error('SELL-ALL build error:', e.message);
       }
     }
 
-    if (builtTxs.length === 0)
-      return res
-        .status(500)
-        .json({ error: 'No sell-all transactions built' });
+    if (builtTxs.length === 0) {
+      return res.status(500).json({ error: 'No sell-all transactions built' });
+    }
 
-    // 2) JITO BUNDLE
-    if (builtTxs.length > 0) {
-      try {
-        const bundleTxs = builtTxs.map((tx) => tx.signedTx);
+    // Try JITO BUNDLE first
+    try {
+      const bundleTxs = builtTxs.map((tx) => tx.signedTx);
 
-        const jitoBody = {
-          jsonrpc: '2.0',
-          id: 1,
-          method: 'sendBundle',
-          params: [bundleTxs],
-        };
+      const jitoBody = {
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'sendBundle',
+        params: [bundleTxs],
+      };
 
-        const jitoResp = await fetch(JITO_BUNDLE_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(jitoBody),
-        });
+      const jitoResp = await fetch(JITO_BUNDLE_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(jitoBody),
+      });
 
-        const jitoData = await jitoResp.text().catch(() => '');
+      const jitoData = await jitoResp.text().catch(() => '');
 
-        console.log('📦 JITO BUNDLE RESULT:', jitoData);
+      console.log('📦 JITO BUNDLE RESULT:', jitoData);
 
-        for (const tx of builtTxs) {
-          sigs.push({
-            wallet: tx.wallet,
-            signature: '(JITO bundle) – check solscan for bundle',
-          });
-        }
+      if (jitoResp.ok) {
+        const sigs = builtTxs.map((tx) => ({
+          wallet: tx.wallet,
+          signature: '(JITO bundle) – check solscan',
+        }));
 
         return res.json({
           status: 'ok',
@@ -538,18 +1004,19 @@ app.post('/api/trade/sell-all', async (req, res) => {
           txCount: builtTxs.length,
           signatures: sigs,
         });
-      } catch (e) {
-        console.error('❌ JITO bundle error:', e.message);
-        // fallback ниже
       }
+
+      console.warn('⚠️ JITO bundle failed, falling back to RPC');
+    } catch (e) {
+      console.error('❌ JITO bundle error:', e.message);
     }
 
-    // 3) FALLBACK — обычная отправка если JITO не работает
+    // Fallback to regular RPC
+    const sigs = [];
+
     for (const tx of builtTxs) {
       try {
-        const raw = bs58.decode(tx.signedTx);
-
-        const sig = await connection.sendRawTransaction(raw, {
+        const sig = await connection.sendRawTransaction(tx.rawTx, {
           skipPreflight: true,
           maxRetries: 0,
         });
@@ -586,280 +1053,8 @@ app.post('/api/trade/sell-all', async (req, res) => {
 });
 
 // =============================
-// API 7: BUY-REST
+// API 11: SELL-ALL-V2 (alternative JITO implementation)
 // =============================
-
-app.post('/api/trade/buy-rest', async (req, res) => {
-  try {
-    const { mintAddress, slippagePercent, perWalletAmounts } = req.body || {};
-
-    if (!mintAddress)
-      return res.status(400).json({ error: 'mintAddress required' });
-
-    if (!Array.isArray(perWalletAmounts) || perWalletAmounts.length === 0)
-      return res
-        .status(400)
-        .json({ error: 'perWalletAmounts[] required' });
-
-    const slip = Number(slippagePercent);
-    const effectiveSlippage = slip > 0 && slip <= 100 ? slip : 10;
-
-    const sigs = [];
-
-    for (const w of perWalletAmounts) {
-      try {
-        const kp = Keypair.fromSecretKey(bs58.decode(w.secretKey));
-
-        const tx = await buildPumpfunBuyTx({
-          walletKp: kp,
-          mint: mintAddress,
-          amountSol: Number(w.solAmount),
-          priorityFeeLamports: 0,
-          slippagePercent: effectiveSlippage,
-        });
-
-        if (!tx) continue;
-
-        const raw = tx.serialize();
-        const sig = await connection.sendRawTransaction(raw, {
-          skipPreflight: true,
-          maxRetries: 0,
-        });
-
-        try {
-          await connection.confirmTransaction(sig, 'confirmed');
-        } catch {}
-
-        sigs.push({
-          wallet: kp.publicKey.toBase58(),
-          signature: sig,
-          solUsed: w.solAmount,
-        });
-      } catch (e) {
-        console.error('buy-rest error:', e.message);
-      }
-    }
-
-    if (sigs.length === 0)
-      return res.status(500).json({ error: 'No buy-rest transactions sent' });
-
-    res.json({ status: 'ok', txCount: sigs.length, signatures: sigs });
-  } catch (e) {
-    console.error('buy-rest error:', e.message);
-    res.status(500).json({ error: 'internal error', details: e.message });
-  }
-});
-
-// =============================
-// API 8: SMART BUY (percentage + minSol + random delay)
-// =============================
-
-app.post('/api/trade/smart-buy', async (req, res) => {
-  try {
-    const {
-      mintAddress,
-      wallets, // [{ publicKey, secretKey, solBalance }]
-      minBuyPercent,
-      maxBuyPercent,
-      minBuySol,
-      minDelaySec,
-      maxDelaySec,
-      slippagePercent,
-      priorityFeeLamports,
-    } = req.body || {};
-
-    if (!mintAddress)
-      return res.status(400).json({ error: 'mintAddress required' });
-
-    if (!Array.isArray(wallets) || wallets.length === 0)
-      return res.status(400).json({ error: 'wallets[] required' });
-
-    let minPct = Number(minBuyPercent);
-    let maxPct = Number(maxBuyPercent);
-
-    if (!isFinite(minPct) || !isFinite(maxPct))
-      return res
-        .status(400)
-        .json({ error: 'minBuyPercent/maxBuyPercent required' });
-
-    if (minPct <= 0 || maxPct <= 0 || maxPct < minPct)
-      return res.status(400).json({ error: 'percent ranges invalid' });
-
-    // Absolute minimum SOL per tx
-    let minBuySolAbs = Number(minBuySol);
-    if (!isFinite(minBuySolAbs) || minBuySolAbs < 0.01) {
-      minBuySolAbs = 0.01;
-    }
-
-    // Delay range
-    let minDelay = Number(minDelaySec);
-    let maxDelay = Number(maxDelaySec);
-
-    if (!isFinite(minDelay) || minDelay < 0.1) minDelay = 0.1;
-    if (!isFinite(maxDelay) || maxDelay < minDelay) maxDelay = minDelay;
-    if (maxDelay > 10) maxDelay = 10;
-
-    const slip = Number(slippagePercent);
-    const effectiveSlippage = slip > 0 && slip <= 100 ? slip : 10;
-
-    const priorityLamports = Number(priorityFeeLamports) || 0;
-
-    const results = [];
-    let sentCount = 0;
-
-    for (const w of wallets) {
-      const walletPub = w.publicKey;
-      const walletSecret = w.secretKey;
-      const solBalance = Number(w.solBalance || 0);
-
-      if (!walletPub || !walletSecret) {
-        results.push({
-          wallet: walletPub,
-          skipped: true,
-          reason: 'invalid wallet data',
-        });
-        continue;
-      }
-
-      if (!isFinite(solBalance) || solBalance <= 0) {
-        results.push({
-          wallet: walletPub,
-          skipped: true,
-          reason: 'zero or invalid balance',
-          solBalance,
-        });
-        continue;
-      }
-
-      // минимум 0.002 SOL на комиссии
-      const safeBal = Math.max(solBalance - 0.002, 0);
-
-      if (safeBal < minBuySolAbs) {
-        results.push({
-          wallet: walletPub,
-          skipped: true,
-          reason: 'balance < minBuySolAbs',
-          solBalance,
-        });
-        continue;
-      }
-
-      const minAmtFromPct = (safeBal * minPct) / 100;
-      const maxAmtFromPct = (safeBal * maxPct) / 100;
-
-      if (maxAmtFromPct < minBuySolAbs) {
-        results.push({
-          wallet: walletPub,
-          skipped: true,
-          reason: 'maxPct * balance < minBuySolAbs',
-          solBalance,
-        });
-        continue;
-      }
-
-      let rawAmountSol = randRange(minAmtFromPct, maxAmtFromPct);
-      rawAmountSol = Math.max(rawAmountSol, minBuySolAbs);
-      rawAmountSol = Math.min(rawAmountSol, safeBal);
-
-      if (rawAmountSol < minBuySolAbs || rawAmountSol <= 0) {
-        results.push({
-          wallet: walletPub,
-          skipped: true,
-          reason: 'calculated amount < minBuySolAbs',
-          solBalance,
-        });
-        continue;
-      }
-
-      const dSec = randRange(minDelay, maxDelay);
-      const dMs = Math.floor(dSec * 1000);
-
-      const walletKp = Keypair.fromSecretKey(bs58.decode(walletSecret));
-
-      if (dMs > 0) await sleep(dMs);
-
-      try {
-        const tx = await buildPumpfunBuyTx({
-          walletKp,
-          mint: mintAddress,
-          amountSol: rawAmountSol,
-          priorityFeeLamports: priorityLamports,
-          slippagePercent: effectiveSlippage,
-        });
-
-        if (!tx) {
-          results.push({
-            wallet: walletPub,
-            skipped: true,
-            reason: 'failed to build buy tx',
-            solBalance,
-            dSec,
-            rawAmountSol,
-          });
-          continue;
-        }
-
-        const raw = tx.serialize();
-
-        const sig = await connection.sendRawTransaction(raw, {
-          skipPreflight: true,
-          maxRetries: 0,
-        });
-
-        try {
-          await connection.confirmTransaction(sig, 'confirmed');
-        } catch {}
-
-        sentCount++;
-
-        results.push({
-          wallet: walletPub,
-          skipped: false,
-          signature: sig,
-          solBalance,
-          dSec,
-          rawAmountSol,
-        });
-      } catch (e) {
-        console.error('smart-buy wallet error:', walletPub, e.message);
-        results.push({
-          wallet: walletPub,
-          skipped: true,
-          reason: 'exception',
-          error: e.message,
-        });
-      }
-    }
-
-    if (sentCount === 0) {
-      return res.status(500).json({
-        error: 'No smart-buy transactions sent',
-        results,
-      });
-    }
-
-    res.json({
-      status: 'ok',
-      txCount: sentCount,
-      results,
-    });
-  } catch (e) {
-    console.error('smart-buy error:', e.message);
-    res.status(500).json({ error: 'internal error', details: e.message });
-  }
-});
-
-// =============================
-// API 9: ROOT
-// =============================
-
-app.get('/', (_req, res) => {
-  res.json({ status: 'ok', message: 'Solana bundler backend alive' });
-});
-
-// ========================================================
-// SELL ALL — НОВАЯ ВЕРСИЯ v2 (JITO + fallback)
-// ========================================================
 
 app.post('/api/trade/sell-all-v2', async (req, res) => {
   try {
@@ -870,23 +1065,19 @@ app.post('/api/trade/sell-all-v2', async (req, res) => {
       slippagePercent,
     } = req.body || {};
 
-    if (
-      !Array.isArray(walletSecretKeysBase58) ||
-      walletSecretKeysBase58.length === 0
-    )
-      return res
-        .status(400)
-        .json({ error: 'walletSecretKeysBase58[] required' });
+    if (!Array.isArray(walletSecretKeysBase58) || walletSecretKeysBase58.length === 0) {
+      return res.status(400).json({ error: 'walletSecretKeysBase58[] required' });
+    }
 
-    if (!mintAddress)
+    if (!mintAddress) {
       return res.status(400).json({ error: 'mintAddress required' });
+    }
 
     const slip = Number(slippagePercent);
     const effectiveSlippage = slip > 0 && slip <= 100 ? slip : 35;
 
     const built = [];
 
-    // 1) build всех sell-all
     for (const sk of walletSecretKeysBase58) {
       try {
         const kp = Keypair.fromSecretKey(bs58.decode(sk));
@@ -911,12 +1102,11 @@ app.post('/api/trade/sell-all-v2', async (req, res) => {
       }
     }
 
-    if (built.length === 0)
-      return res
-        .status(500)
-        .json({ error: 'No sell-all transactions built' });
+    if (built.length === 0) {
+      return res.status(500).json({ error: 'No sell-all transactions built' });
+    }
 
-    // 2) JITO bundle
+    // Try JITO
     try {
       const jitoBundle = built.map((b) => b.rawTxBase58);
 
@@ -950,7 +1140,7 @@ app.post('/api/trade/sell-all-v2', async (req, res) => {
       console.error('❌ JITO bundle error:', e.message);
     }
 
-    // 3) fallback по RPC
+    // Fallback
     const sigs = [];
 
     for (const b of built) {
@@ -991,235 +1181,139 @@ app.post('/api/trade/sell-all-v2', async (req, res) => {
   }
 });
 
-// ========================================================
-// BUY/SELL universal builder v2
-// ========================================================
+// =============================
+// TOKEN INFO & PRICE APIs (FOR PRO TRADING)
+// =============================
 
-async function buildPumpfunTx({
-  walletKp,
-  mint,
-  amountSol,
-  action,
-  slippagePercent,
-  priorityFeeLamports,
-}) {
+app.get('/api/token/info', async (req, res) => {
   try {
-    const priorityFeeSol = lamportsToSol(priorityFeeLamports || 0) || 0.00001;
+    const { mint } = req.query;
+    
+    if (!mint) {
+      return res.status(400).json({ error: 'mint parameter required' });
+    }
 
-    const isSellAll = action === 'sell' && amountSol === '100%';
-    const isSellPercent =
-      action === 'sell' && typeof amountSol === 'string' && amountSol.endsWith('%');
+    const response = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${mint}`);
+    const data = await response.json();
 
-    const body = {
-      publicKey: walletKp.publicKey.toBase58(),
-      action,
-      mint,
-      denominatedInSol: action === 'buy' ? true : false,
-      amount: action === 'buy' ? Number(amountSol) : amountSol,
-      slippage: slippagePercent ?? 10,
-      priorityFee: priorityFeeSol,
-      pool: 'pump',
+    if (!data.pairs || data.pairs.length === 0) {
+      return res.status(404).json({ error: 'Token not found' });
+    }
+
+    const mainPair = data.pairs.sort((a, b) => 
+      (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0)
+    )[0];
+
+    const tokenInfo = {
+      address: mint,
+      symbol: mainPair.baseToken.symbol,
+      name: mainPair.baseToken.name,
+      price: parseFloat(mainPair.priceUsd || 0),
+      priceChange24h: parseFloat(mainPair.priceChange?.h24 || 0),
+      volume24h: parseFloat(mainPair.volume?.h24 || 0),
+      marketCap: parseFloat(mainPair.fdv || 0),
+      liquidity: parseFloat(mainPair.liquidity?.usd || 0),
+      liquiditySOL: parseFloat(mainPair.liquidity?.base || 0),
+      pairAddress: mainPair.pairAddress,
+      dexId: mainPair.dexId,
+      url: mainPair.url,
     };
 
-    const resp = await fetch(PUMPFUN_TRADE_LOCAL_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-
-    if (!resp.ok) {
-      const msg = await resp.text();
-      console.error(`❌ Pump.fun ${action} error:`, resp.status, msg);
-      return null;
-    }
-
-    const buf = await resp.arrayBuffer();
-    const tx = VersionedTransaction.deserialize(new Uint8Array(buf));
-    tx.sign([walletKp]);
-    return tx;
+    res.json(tokenInfo);
   } catch (e) {
-    console.error(`❌ buildPumpfunTx(${action}) failed:`, e.message);
-    return null;
-  }
-}
-
-// ========================================================
-// FAST BUY endpoint — единая универсальная покупка
-// ========================================================
-
-app.post('/api/trade/buy-fast', async (req, res) => {
-  try {
-    const {
-      walletSecretKeysBase58,
-      mintAddress,
-      amountSol,
-      slippagePercent,
-      priorityFeeLamports,
-    } = req.body || {};
-
-    if (
-      !Array.isArray(walletSecretKeysBase58) ||
-      walletSecretKeysBase58.length === 0
-    )
-      return res
-        .status(400)
-        .json({ error: 'walletSecretKeysBase58[] required' });
-
-    if (!mintAddress) return res.status(400).json({ error: 'mintAddress required' });
-    if (!amountSol) return res.status(400).json({ error: 'amountSol required' });
-
-    const slip = Number(slippagePercent);
-    const effectiveSlippage = slip > 0 && slip <= 100 ? slip : 10;
-
-    const sigs = [];
-
-    for (const sk of walletSecretKeysBase58) {
-      try {
-        const kp = Keypair.fromSecretKey(bs58.decode(sk));
-
-        const tx = await buildPumpfunTx({
-          walletKp: kp,
-          mint: mintAddress,
-          amountSol,
-          action: 'buy',
-          slippagePercent: effectiveSlippage,
-          priorityFeeLamports,
-        });
-
-        if (!tx) continue;
-
-        const sig = await connection.sendRawTransaction(tx.serialize(), {
-          skipPreflight: true,
-          maxRetries: 0,
-        });
-
-        try {
-          await connection.confirmTransaction(sig, 'confirmed');
-        } catch {}
-
-        sigs.push({
-          wallet: kp.publicKey.toBase58(),
-          signature: sig,
-        });
-      } catch (e) {
-        sigs.push({
-          wallet: 'unknown',
-          error: e.message,
-        });
-      }
-    }
-
-    if (sigs.length === 0)
-      return res.status(500).json({ error: 'No transactions sent' });
-
-    res.json({ status: 'ok', signatures: sigs });
-  } catch (e) {
-    console.error('buy-fast error:', e.message);
-    res.status(500).json({ error: 'internal error', details: e.message });
+    console.error('Token info error:', e);
+    res.status(500).json({ error: 'Failed to fetch token info', details: e.message });
   }
 });
 
-// ========================================================
-// SELL FAST (частичный sell %)
-// ========================================================
-
-app.post('/api/trade/sell-fast', async (req, res) => {
+app.get('/api/token/price', async (req, res) => {
   try {
-    const {
-      walletSecretKeysBase58,
-      mintAddress,
-      sellPercent,
-      slippagePercent,
-      priorityFeeLamports,
-    } = req.body || {};
-
-    if (
-      !Array.isArray(walletSecretKeysBase58) ||
-      walletSecretKeysBase58.length === 0
-    )
-      return res
-        .status(400)
-        .json({ error: 'walletSecretKeysBase58[] required' });
-
-    if (!mintAddress) return res.status(400).json({ error: 'mintAddress required' });
-
-    const percent = Number(sellPercent);
-    if (!isFinite(percent) || percent <= 0 || percent > 100)
-      return res.status(400).json({ error: 'sellPercent must be 1–100' });
-
-    const slip = Number(slippagePercent);
-    const effectiveSlippage = slip > 0 && slip <= 100 ? slip : 20;
-
-    const sigs = [];
-
-    for (const sk of walletSecretKeysBase58) {
-      try {
-        const kp = Keypair.fromSecretKey(bs58.decode(sk));
-
-        const tx = await buildPumpfunTx({
-          walletKp: kp,
-          mint: mintAddress,
-          action: 'sell',
-          amountSol: `${percent}%`,
-          slippagePercent: effectiveSlippage,
-          priorityFeeLamports,
-        });
-
-        if (!tx) continue;
-
-        const sig = await connection.sendRawTransaction(tx.serialize(), {
-          skipPreflight: true,
-          maxRetries: 0,
-        });
-
-        try {
-          await connection.confirmTransaction(sig, 'confirmed');
-        } catch {}
-
-        sigs.push({
-          wallet: kp.publicKey.toBase58(),
-          signature: sig,
-        });
-      } catch (e) {
-        sigs.push({
-          wallet: 'unknown',
-          error: e.message,
-        });
-      }
+    const { mint } = req.query;
+    
+    if (!mint) {
+      return res.status(400).json({ error: 'mint parameter required' });
     }
 
-    if (sigs.length === 0)
-      return res.status(500).json({ error: 'No sell transactions sent' });
+    const response = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${mint}`);
+    const data = await response.json();
 
-    res.json({
-      status: 'ok',
-      txCount: sigs.length,
-      signatures: sigs,
+    if (!data.pairs || data.pairs.length === 0) {
+      return res.status(404).json({ error: 'Token not found' });
+    }
+
+    const mainPair = data.pairs[0];
+    const price = parseFloat(mainPair.priceUsd || 0);
+
+    res.json({ 
+      price,
+      priceNative: parseFloat(mainPair.priceNative || 0),
+      timestamp: Date.now()
     });
   } catch (e) {
-    console.error('sell-fast error:', e.message);
-    res.status(500).json({ error: 'internal error', details: e.message });
+    console.error('Token price error:', e);
+    res.status(500).json({ error: 'Failed to fetch token price', details: e.message });
   }
 });
 
-// ========================================================
-// HEALTH CHECK + PING
-// ========================================================
+// =============================
+// FRESH TRACKER REST API
+// =============================
+
+app.get('/api/fresh/trades', (req, res) => {
+  if (!freshTrackerService) {
+    return res.status(503).json({ error: 'Fresh Tracker not initialized' });
+  }
+  
+  const limit = parseInt(req.query.limit) || 100;
+  const trades = freshTrackerService.getRecentTrades().slice(0, limit);
+  
+  res.json({
+    status: 'ok',
+    count: trades.length,
+    trades: trades
+  });
+});
+
+app.post('/api/fresh/analyze-wallet', (req, res) => {
+  const { walletAddress } = req.body;
+  
+  if (!walletAddress) {
+    return res.status(400).json({ error: 'walletAddress required' });
+  }
+  
+  if (!freshTrackerService) {
+    return res.status(503).json({ error: 'Fresh Tracker not initialized' });
+  }
+  
+  freshTrackerService.requestWalletAnalysis(walletAddress);
+  
+  res.json({
+    status: 'ok',
+    message: 'Analysis requested'
+  });
+});
+
+// =============================
+// HEALTH CHECK
+// =============================
 
 app.get('/api/ping', (_req, res) => {
   res.json({
     status: 'alive',
     rpc: RPC_ENDPOINT,
     jito: JITO_BUNDLE_URL,
+    fresh_tracker: !!freshTrackerService,
     time: Date.now(),
   });
 });
 
-// ========================================================
-// GLOBAL ERROR HANDLER
-// ========================================================
+app.get('/', (_req, res) => {
+  res.json({ status: 'ok', message: 'Solana bundler backend alive' });
+});
 
-
+// =============================
+// ERROR HANDLERS
+// =============================
 
 app.use((err, req, res, next) => {
   console.error('🔥 GLOBAL ERROR:', err.message || err);
@@ -1228,10 +1322,6 @@ app.use((err, req, res, next) => {
     details: err.message || String(err),
   });
 });
-
-// ========================================================
-// FINAL CATCH-ALL ROUTE
-// ========================================================
 
 app.get('*', (_req, res) => {
   res.json({
@@ -1249,19 +1339,29 @@ app.get('*', (_req, res) => {
       '/api/trade/sell-fast',
       '/api/trade/sell-all',
       '/api/trade/sell-all-v2',
+      '/api/token/info',
+      '/api/token/price',
+      '/api/fresh/trades',
+      '/api/fresh/analyze-wallet',
       '/api/ping',
     ],
   });
 });
 
-// ========================================================
-// SERVER START
-// ========================================================
+// =============================
+// SERVER START WITH WEBSOCKET
+// =============================
 
-app.listen(PORT, () => {
+const httpServer = http.createServer(app);
+
+// Setup Fresh Tracker WebSocket
+freshTrackerService = setupFreshTrackerWebSocket(httpServer);
+
+httpServer.listen(PORT, () => {
   console.log('=======================================================');
   console.log(`🚀 Solana backend running on http://localhost:${PORT}`);
   console.log('📡 RPC:', RPC_ENDPOINT);
- console.log('⚡ JITO:', JITO_BUNDLE_URL);
+  console.log('⚡ JITO:', JITO_BUNDLE_URL);
+  console.log('🔴 Fresh Tracker WS: ws://localhost:' + PORT + '/fresh-tracker');
   console.log('=======================================================');
 });
