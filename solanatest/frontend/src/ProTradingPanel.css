@@ -1,0 +1,583 @@
+/* ProTradingPanel.css - Matching DEV page style */
+
+.pro-trading-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 24px;
+}
+
+/* ===================================
+   PANEL HEADER
+   =================================== */
+
+.panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.panel-header h2 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  background: linear-gradient(135deg, #f7f1ff, #c69fff);
+  -webkit-background-clip: text;
+  color: transparent;
+}
+
+.status-indicators {
+  display: flex;
+  gap: 12px;
+}
+
+.indicator {
+  padding: 6px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.5);
+  transition: all 0.2s;
+}
+
+.indicator.active {
+  background: linear-gradient(135deg, #16a34a, #4ade80);
+  border-color: #4ade80;
+  color: #020617;
+  box-shadow: 0 4px 12px rgba(74, 222, 128, 0.3);
+}
+
+/* ===================================
+   TOKEN SECTION
+   =================================== */
+
+.token-section {
+  background:
+    radial-gradient(circle at top left, rgba(180, 120, 255, 0.35), transparent 55%),
+    radial-gradient(circle at bottom right, rgba(94, 58, 190, 0.55), #0a0317);
+}
+
+.token-section h3 {
+  margin: 0 0 12px;
+  font-size: 14px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.token-input-row {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.ca-input {
+  flex: 1;
+  padding: 12px 14px;
+  font-size: 13px;
+  font-family: 'Courier New', monospace;
+  background: rgba(5, 0, 20, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 10px;
+  color: #f5efff;
+  transition: all 0.2s;
+}
+
+.ca-input:focus {
+  outline: none;
+  border-color: #c69fff;
+  background: rgba(5, 0, 20, 0.9);
+}
+
+.ca-input::placeholder {
+  color: rgba(255, 255, 255, 0.3);
+}
+
+.btn-load {
+  padding: 12px 20px;
+  font-size: 13px;
+  font-weight: 700;
+  background: linear-gradient(135deg, #b478ff, #7c3aed);
+  border: none;
+  border-radius: 10px;
+  color: #fff;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-load:hover:not(:disabled) {
+  background: linear-gradient(135deg, #c69fff, #8b5cf6);
+  box-shadow: 0 4px 12px rgba(180, 120, 255, 0.4);
+}
+
+.btn-load:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.token-info-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.info-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px;
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.info-item .label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.info-item .value {
+  font-size: 14px;
+  font-weight: 700;
+  color: #c69fff;
+}
+
+.chart-embed {
+  margin-top: 16px;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+/* ===================================
+   PRESETS SECTION
+   =================================== */
+
+.presets-section h3 {
+  margin: 0 0 12px;
+  font-size: 14px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.preset-buttons {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+
+.preset-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 16px 12px;
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border: 2px solid;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.preset-btn.conservative {
+  background: rgba(59, 130, 246, 0.1);
+  border-color: rgba(59, 130, 246, 0.3);
+  color: #60a5fa;
+}
+
+.preset-btn.conservative:hover {
+  background: rgba(59, 130, 246, 0.2);
+  border-color: #60a5fa;
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+}
+
+.preset-btn.balanced {
+  background: rgba(180, 120, 255, 0.1);
+  border-color: rgba(180, 120, 255, 0.3);
+  color: #c69fff;
+}
+
+.preset-btn.balanced:hover {
+  background: rgba(180, 120, 255, 0.2);
+  border-color: #c69fff;
+  box-shadow: 0 4px 12px rgba(180, 120, 255, 0.3);
+}
+
+.preset-btn.aggressive {
+  background: rgba(239, 68, 68, 0.1);
+  border-color: rgba(239, 68, 68, 0.3);
+  color: #f87171;
+}
+
+.preset-btn.aggressive:hover {
+  background: rgba(239, 68, 68, 0.2);
+  border-color: #f87171;
+  box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3);
+}
+
+.preset-hint {
+  font-size: 10px;
+  font-weight: 400;
+  text-transform: none;
+  opacity: 0.7;
+}
+
+/* ===================================
+   CONFIG GRID
+   =================================== */
+
+.config-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 20px;
+}
+
+.config-card h3 {
+  margin: 0 0 12px;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.config-card label {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  margin: 10px 0;
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.config-card input[type="number"] {
+  width: 80px;
+  padding: 6px 10px;
+  font-size: 12px;
+  background: rgba(5, 0, 20, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 8px;
+  color: #f5efff;
+  text-align: right;
+}
+
+.config-card input[type="number"]:focus {
+  outline: none;
+  border-color: #c69fff;
+  background: rgba(5, 0, 20, 0.9);
+}
+
+.config-card input[type="number"]:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.checkbox-inline-header {
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  margin: 0 !important;
+  cursor: pointer;
+}
+
+.checkbox-inline-header input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
+}
+
+.checkbox-label {
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  cursor: pointer;
+}
+
+.checkbox-label input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+
+/* Take Profit Levels */
+.tp-level {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 0;
+  font-size: 12px;
+}
+
+.tp-label {
+  font-weight: 700;
+  color: #4ade80;
+  min-width: 35px;
+}
+
+.tp-level input {
+  width: 60px !important;
+}
+
+.tp-level span {
+  color: rgba(255, 255, 255, 0.6);
+}
+
+/* ===================================
+   EXECUTION SECTION
+   =================================== */
+
+.execution-section h3 {
+  margin: 0 0 12px;
+  font-size: 14px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.wallet-info {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px;
+  margin-bottom: 16px;
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.wallet-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.btn-small {
+  padding: 6px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 6px;
+  color: #f5efff;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-small:hover {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.3);
+}
+
+.execution-buttons {
+  display: grid;
+  grid-template-columns: 1.5fr 1fr;
+  gap: 12px;
+}
+
+.btn-execute {
+  padding: 16px 24px;
+  font-size: 14px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border: none;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-execute:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.btn-buy-big {
+  background: linear-gradient(135deg, #16a34a, #4ade80);
+  color: #020617;
+  box-shadow: 0 4px 12px rgba(74, 222, 128, 0.3);
+}
+
+.btn-buy-big:hover:not(:disabled) {
+  background: linear-gradient(135deg, #15803d, #22c55e);
+  box-shadow: 0 6px 16px rgba(74, 222, 128, 0.5);
+  transform: translateY(-2px);
+}
+
+.btn-monitor {
+  background: rgba(180, 120, 255, 0.2);
+  border: 2px solid rgba(180, 120, 255, 0.4);
+  color: #c69fff;
+}
+
+.btn-monitor:hover:not(:disabled) {
+  background: rgba(180, 120, 255, 0.3);
+  border-color: #c69fff;
+  box-shadow: 0 4px 12px rgba(180, 120, 255, 0.4);
+}
+
+.btn-monitor.active {
+  background: linear-gradient(135deg, #b478ff, #7c3aed);
+  border-color: #b478ff;
+  color: #fff;
+  animation: pulse-monitoring 2s ease-in-out infinite;
+}
+
+@keyframes pulse-monitoring {
+  0%, 100% {
+    box-shadow: 0 4px 12px rgba(180, 120, 255, 0.4);
+  }
+  50% {
+    box-shadow: 0 4px 20px rgba(180, 120, 255, 0.7);
+  }
+}
+
+/* ===================================
+   POSITIONS SECTION
+   =================================== */
+
+.positions-section h3 {
+  margin: 0 0 16px;
+  font-size: 14px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.positions-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.position-item {
+  padding: 14px;
+  background: rgba(0, 0, 0, 0.4);
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  transition: all 0.2s;
+}
+
+.position-item:hover {
+  background: rgba(0, 0, 0, 0.5);
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+.position-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.position-token {
+  font-size: 16px;
+  font-weight: 700;
+  color: #c69fff;
+}
+
+.position-pnl {
+  font-size: 18px;
+  font-weight: 800;
+}
+
+.position-pnl.positive {
+  color: #4ade80;
+}
+
+.position-pnl.negative {
+  color: #f87171;
+}
+
+.position-details {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.detail-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.detail-row .positive {
+  color: #4ade80;
+  font-weight: 700;
+}
+
+.detail-row .negative {
+  color: #f87171;
+  font-weight: 700;
+}
+
+.tp-indicators {
+  display: flex;
+  gap: 6px;
+}
+
+.tp-hit {
+  padding: 3px 8px;
+  font-size: 10px;
+  font-weight: 700;
+  background: rgba(74, 222, 128, 0.2);
+  border: 1px solid rgba(74, 222, 128, 0.4);
+  border-radius: 6px;
+  color: #4ade80;
+}
+
+.btn-sell-small {
+  padding: 6px 14px;
+  font-size: 11px;
+  font-weight: 700;
+  background: linear-gradient(135deg, #dc2626, #f87171);
+  border: none;
+  border-radius: 8px;
+  color: #fff;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-sell-small:hover {
+  background: linear-gradient(135deg, #b91c1c, #ef4444);
+  box-shadow: 0 4px 12px rgba(239, 68, 68, 0.4);
+}
+
+/* ===================================
+   RESPONSIVE
+   =================================== */
+
+@media (max-width: 1200px) {
+  .config-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  
+  .token-info-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 768px) {
+  .config-grid {
+    grid-template-columns: 1fr;
+  }
+  
+  .preset-buttons {
+    grid-template-columns: 1fr;
+  }
+  
+  .execution-buttons {
+    grid-template-columns: 1fr;
+  }
+  
+  .token-info-grid {
+    grid-template-columns: 1fr;
+  }
+}
